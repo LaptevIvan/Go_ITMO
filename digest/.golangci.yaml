@@ -1,0 +1,34 @@
+run:
+  concurrency: 8
+  issues-exit-code: 1
+  tests: true
+
+linters-settings:
+  depguard:
+    rules:
+      main:
+        list-mode: original
+        files:
+          - $all
+        allow:
+          - bytes
+          - math
+          - math/cmplx
+          - strings
+          - unsafe
+          - math/rand/v2
+linters:
+  enable:
+    - depguard
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+issues:
+  exclude-files:
+    - main_test.go
+  exclude-use-default: true
+  max-issues-per-linter: 0
