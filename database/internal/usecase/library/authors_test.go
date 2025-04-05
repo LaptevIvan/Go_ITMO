@@ -33,7 +33,6 @@ func initAuthorTest(t *testing.T) (context.Context, *mocks.MockAuthorRepository,
 
 func TestRegisterAuthor(t *testing.T) {
 	t.Parallel()
-	ctx, mockAuthorRepo, s := initAuthorTest(t)
 
 	const name = "testAuthor"
 
@@ -51,6 +50,7 @@ func TestRegisterAuthor(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
+			ctx, mockAuthorRepo, s := initAuthorTest(t)
 			tErr := test.errRequire
 			mockAuthorRepo.EXPECT().RegisterAuthor(ctx, gomock.Any()).DoAndReturn(func(ctx context.Context, input entity.Author) (entity.Author, error) {
 				if tErr != nil {
@@ -78,7 +78,6 @@ func TestRegisterAuthor(t *testing.T) {
 
 func TestChangeAuthorInfo(t *testing.T) {
 	t.Parallel()
-	ctx, mockAuthorRepo, s := initAuthorTest(t)
 
 	const (
 		id   = "123"
@@ -99,6 +98,7 @@ func TestChangeAuthorInfo(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
+			ctx, mockAuthorRepo, s := initAuthorTest(t)
 			tErr := test.errRequire
 			mockAuthorRepo.EXPECT().ChangeAuthorInfo(ctx, gomock.Any()).Return(tErr)
 			err := s.ChangeAuthorInfo(ctx, id, name)
@@ -109,7 +109,6 @@ func TestChangeAuthorInfo(t *testing.T) {
 
 func TestGetAuthorInfo(t *testing.T) {
 	t.Parallel()
-	ctx, mockAuthorRepo, s := initAuthorTest(t)
 
 	const (
 		id   = "123"
@@ -139,6 +138,7 @@ func TestGetAuthorInfo(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
+			ctx, mockAuthorRepo, s := initAuthorTest(t)
 			tAuthor := test.requireAuthor
 			tErr := test.requireErr
 

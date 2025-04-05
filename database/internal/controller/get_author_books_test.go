@@ -55,12 +55,15 @@ func TestGetAuthorBooks(t *testing.T) {
 
 			if code != codes.InvalidArgument {
 				mockServer.EXPECT().Context().Return(context.Background())
-				mockBooksUseCase.EXPECT().GetAuthorBooks(ctx, req.GetAuthorId()).DoAndReturn(func(ctx context.Context, Id string) ([]entity.Book, error) {
+				mockBooksUseCase.EXPECT().GetAuthorBooks(ctx, req.GetAuthorId()).DoAndReturn(func(ctx context.Context, Id string) (<-chan entity.Book, error) {
 					e := convertBookCodeToError(code)
 					if code == codes.Internal {
 						return nil, e
 					}
-					return []entity.Book{{}}, e
+					books := make(chan entity.Book, 1)
+					books <- entity.Book{}
+					close(books)
+					return books, e
 				})
 				if code != codes.Internal {
 					mockServer.EXPECT().Send(gomock.Eq(&library.Book{})).DoAndReturn(func(book *library.Book) error {

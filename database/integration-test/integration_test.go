@@ -677,7 +677,12 @@ func TestLibraryWithoutInMemoryInvariant(t *testing.T) {
 		bookReceived, err := client.GetBookInfo(ctx, &GetBookInfoRequest{
 			Id: bookAdded.Book.Id,
 		})
+
 		require.NoError(t, err)
+
+		slices.Sort(bookAdded.Book.AuthorId)
+		slices.Sort(bookReceived.Book.AuthorId)
+
 		require.EqualExportedValues(t, bookAdded.Book, bookReceived.Book)
 	})
 

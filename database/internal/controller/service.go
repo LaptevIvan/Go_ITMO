@@ -19,11 +19,11 @@ type (
 		AddBook(ctx context.Context, name string, authorIDs []string) (entity.Book, error)
 		GetBookInfo(ctx context.Context, bookID string) (entity.Book, error)
 		UpdateBook(ctx context.Context, id, newName string, newAuthorIDs []string) error
-		GetAuthorBooks(ctx context.Context, idAuthor string) ([]entity.Book, error)
+		GetAuthorBooks(ctx context.Context, idAuthor string) (<-chan entity.Book, error)
 	}
 )
 
-const log = false
+const log = true
 
 var _ generated.LibraryServer = (*implementation)(nil)
 

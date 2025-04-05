@@ -21,7 +21,7 @@ func (i *implementation) GetAuthorBooks(req *library.GetAuthorBooksRequest, serv
 		return i.convertErr(err)
 	}
 
-	for _, bk := range books {
+	for bk := range books {
 		err = server.Send(&library.Book{
 			Id:       bk.ID,
 			Name:     bk.Name,

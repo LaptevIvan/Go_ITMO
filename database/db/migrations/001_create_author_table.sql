@@ -1,8 +1,6 @@
 -- +goose Up
-set
-timezone = 'Europe/Moscow';
-CREATE
-EXTENSION IF NOT EXISTS "uuid-ossp";
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE author
 (

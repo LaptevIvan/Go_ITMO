@@ -46,14 +46,18 @@ func (l *libraryImpl) UpdateBook(ctx context.Context, id, newName string, newAut
 		l.logger.Info("Updating the book with id", zap.String("id of book", id))
 	}
 
-	return l.booksRepository.UpdateBook(ctx, entity.Book{
+	err := l.booksRepository.UpdateBook(ctx, entity.Book{
 		ID:        id,
 		Name:      newName,
 		AuthorIDs: newAuthorIDs,
 	})
+	if err != nil && log {
+		l.logger.Error("Failed update book", zap.Error(err))
+	}
+	return err
 }
 
-func (l *libraryImpl) GetAuthorBooks(ctx context.Context, idAuthor string) ([]entity.Book, error) {
+func (l *libraryImpl) GetAuthorBooks(ctx context.Context, idAuthor string) (<-chan entity.Book, error) {
 	books, err := l.booksRepository.GetAuthorBooks(ctx, idAuthor)
 	if err != nil {
 		if log {

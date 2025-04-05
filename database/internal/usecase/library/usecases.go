@@ -17,11 +17,11 @@ type (
 		AddBook(ctx context.Context, book entity.Book) (entity.Book, error)
 		UpdateBook(ctx context.Context, updBook entity.Book) error
 		GetBook(ctx context.Context, idBook string) (entity.Book, error)
-		GetAuthorBooks(ctx context.Context, idAuthor string) ([]entity.Book, error)
+		GetAuthorBooks(ctx context.Context, idAuthor string) (<-chan entity.Book, error)
 	}
 )
 
-const log = false
+const log = true
 
 var _ AuthorUseCase = (*libraryImpl)(nil)
 var _ BooksUseCase = (*libraryImpl)(nil)
