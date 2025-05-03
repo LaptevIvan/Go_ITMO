@@ -3,27 +3,25 @@ package controller
 import (
 	"context"
 
+	"github.com/project/library/generated/api/library"
 	generated "github.com/project/library/generated/api/library"
-	"github.com/project/library/internal/entity"
 	"go.uber.org/zap"
 )
 
 type (
 	AuthorUseCase interface {
-		RegisterAuthor(ctx context.Context, authorName string) (entity.Author, error)
+		RegisterAuthor(ctx context.Context, authorName string) (*library.RegisterAuthorResponse, error)
 		ChangeAuthorInfo(ctx context.Context, idAuthor, newName string) error
-		GetAuthorInfo(ctx context.Context, idAuthor string) (entity.Author, error)
+		GetAuthorInfo(ctx context.Context, idAuthor string) (*library.GetAuthorInfoResponse, error)
 	}
 
 	BooksUseCase interface {
-		AddBook(ctx context.Context, name string, authorIDs []string) (entity.Book, error)
-		GetBookInfo(ctx context.Context, bookID string) (entity.Book, error)
+		AddBook(ctx context.Context, name string, authorIDs []string) (*library.AddBookResponse, error)
+		GetBookInfo(ctx context.Context, bookID string) (*library.GetBookInfoResponse, error)
 		UpdateBook(ctx context.Context, id, newName string, newAuthorIDs []string) error
-		GetAuthorBooks(ctx context.Context, idAuthor string) (<-chan entity.Book, error)
+		GetAuthorBooks(ctx context.Context, idAuthor string) (<-chan *library.Book, error)
 	}
 )
-
-const log = true
 
 var _ generated.LibraryServer = (*implementation)(nil)
 

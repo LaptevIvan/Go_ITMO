@@ -3,9 +3,9 @@ package controller
 import (
 	"context"
 
-	"go.uber.org/zap"
+	"github.com/project/library/pkg/logger"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"go.uber.org/zap"
 
 	"github.com/project/library/generated/api/library"
 	"google.golang.org/grpc/codes"
@@ -13,10 +13,7 @@ import (
 )
 
 func (i *implementation) GetBookInfo(ctx context.Context, req *library.GetBookInfoRequest) (*library.GetBookInfoResponse, error) {
-	if err := req.ValidateAll(); err != nil {
-		if log {
-			i.logger.Error("Got invalid request", zap.Any("request", req), zap.Error(err))
-		}
+	if err := req.ValidateAll(); logger.CheckError(err, i.logger, "Got invalid request", zap.Any("request", req), zap.Error(err)) {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
@@ -26,13 +23,5 @@ func (i *implementation) GetBookInfo(ctx context.Context, req *library.GetBookIn
 		return nil, i.convertErr(err)
 	}
 
-	return &library.GetBookInfoResponse{
-		Book: &library.Book{
-			Id:        book.ID,
-			Name:      book.Name,
-			AuthorId:  book.AuthorIDs,
-			CreatedAt: timestamppb.New(book.CreatedAt),
-			UpdatedAt: timestamppb.New(book.UpdatedAt),
-		},
-	}, nil
+	return book, nil
 }

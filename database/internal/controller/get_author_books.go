@@ -2,16 +2,14 @@ package controller
 
 import (
 	"github.com/project/library/generated/api/library"
+	"github.com/project/library/pkg/logger"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 func (i *implementation) GetAuthorBooks(req *library.GetAuthorBooksRequest, server library.Library_GetAuthorBooksServer) error {
-	if err := req.ValidateAll(); err != nil {
-		if log {
-			i.logger.Error("Got invalid request", zap.Any("request", req), zap.Error(err))
-		}
+	if err := req.ValidateAll(); logger.CheckError(err, i.logger, "Got invalid request", zap.Any("request", req), zap.Error(err)) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 
@@ -22,15 +20,8 @@ func (i *implementation) GetAuthorBooks(req *library.GetAuthorBooksRequest, serv
 	}
 
 	for bk := range books {
-		err = server.Send(&library.Book{
-			Id:       bk.ID,
-			Name:     bk.Name,
-			AuthorId: bk.AuthorIDs,
-		})
-		if err != nil {
-			if log {
-				i.logger.Error("Send error", zap.Error(err))
-			}
+		err = server.Send(bk)
+		if logger.CheckError(err, i.logger, "Sending error", zap.Error(err)) {
 			return status.Error(codes.DataLoss, "Sending error")
 		}
 	}

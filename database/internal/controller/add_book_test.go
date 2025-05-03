@@ -8,7 +8,6 @@ import (
 	"github.com/go-ozzo/ozzo-validation/v4/is"
 	"github.com/google/uuid"
 	"github.com/project/library/generated/api/library"
-	"github.com/project/library/internal/entity"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -55,15 +54,18 @@ func TestAddBook(t *testing.T) {
 			authorIDs := req.GetAuthorIds()
 
 			if code != codes.InvalidArgument {
-				mockBooksUseCase.EXPECT().AddBook(ctx, rName, authorIDs).DoAndReturn(func(ctx context.Context, name string, IDs []string) (entity.Book, error) {
+				mockBooksUseCase.EXPECT().AddBook(ctx, rName, authorIDs).DoAndReturn(func(ctx context.Context, name string, IDs []string) (*library.AddBookResponse, error) {
 					e := convertBookCodeToError(code)
 					if code != codes.OK {
-						return entity.Book{}, e
+						return nil, e
 					}
-					return entity.Book{
-						ID:        uuid.NewString(),
-						Name:      name,
-						AuthorIDs: IDs,
+
+					return &library.AddBookResponse{
+						Book: &library.Book{
+							Id:       uuid.NewString(),
+							Name:     name,
+							AuthorId: IDs,
+						},
 					}, e
 				})
 			}

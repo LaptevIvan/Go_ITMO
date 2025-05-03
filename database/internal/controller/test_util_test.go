@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/project/library/internal/controller/mocks"
@@ -23,10 +24,9 @@ func InitBooksTest(t *testing.T) (*gomock.Controller, *mocks.MockBooksUseCase, *
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	booksUseCase := mocks.NewMockBooksUseCase(ctrl)
-	logger, err := zap.NewProduction()
-	if err != nil {
-		t.Fatal("assertion error: " + err.Error())
-	}
+	logger, e := zap.NewProduction()
+	require.NoError(t, e)
+
 	service := New(logger, booksUseCase, nil)
 	return ctrl, booksUseCase, service
 }
@@ -35,10 +35,9 @@ func InitAuthorTest(t *testing.T) (*gomock.Controller, *mocks.MockAuthorUseCase,
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	authorUseCase := mocks.NewMockAuthorUseCase(ctrl)
-	logger, err := zap.NewProduction()
-	if err != nil {
-		t.Fatal("assertion error: " + err.Error())
-	}
+	logger, e := zap.NewProduction()
+	require.NoError(t, e)
+
 	service := New(logger, nil, authorUseCase)
 	return ctrl, authorUseCase, service
 }

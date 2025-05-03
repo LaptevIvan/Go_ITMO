@@ -13,6 +13,5 @@ type Author struct {
 }
 
 var (
-	ErrAuthorNotFound      = errors.New("author not found")
-	ErrAuthorAlreadyExists = errors.New("author already exists")
+	ErrAuthorNotFound = errors.New("author not found")
 )

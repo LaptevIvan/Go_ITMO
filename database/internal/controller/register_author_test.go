@@ -8,7 +8,6 @@ import (
 	"github.com/go-ozzo/ozzo-validation/v4/is"
 	"github.com/google/uuid"
 	"github.com/project/library/generated/api/library"
-	"github.com/project/library/internal/entity"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -53,14 +52,14 @@ func TestRegisterAuthor(t *testing.T) {
 			code := test.codeResponse
 			req := test.request
 			if code != codes.InvalidArgument {
-				mockAuthorUseCase.EXPECT().RegisterAuthor(ctx, req.GetName()).DoAndReturn(func(ctx context.Context, name string) (entity.Author, error) {
+				mockAuthorUseCase.EXPECT().RegisterAuthor(ctx, req.GetName()).DoAndReturn(func(ctx context.Context, name string) (*library.RegisterAuthorResponse, error) {
 					e := convertAuthorCodeToError(code)
 					if code != codes.OK {
-						return entity.Author{}, e
+						return nil, e
 					}
-					return entity.Author{
-						ID:   uuid.NewString(),
-						Name: name,
+
+					return &library.RegisterAuthorResponse{
+						Id: uuid.NewString(),
 					}, e
 				})
 			}

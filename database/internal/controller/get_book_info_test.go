@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/project/library/generated/api/library"
-	"github.com/project/library/internal/entity"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -51,15 +50,18 @@ func TestGetBookInfo(t *testing.T) {
 			req := test.request
 
 			if code != codes.InvalidArgument {
-				mockBooksUseCase.EXPECT().GetBookInfo(ctx, req.GetId()).DoAndReturn(func(ctx context.Context, Id string) (entity.Book, error) {
+				mockBooksUseCase.EXPECT().GetBookInfo(ctx, req.GetId()).DoAndReturn(func(ctx context.Context, Id string) (*library.GetBookInfoResponse, error) {
 					e := convertBookCodeToError(code)
 					if code != codes.OK {
-						return entity.Book{}, e
+						return nil, e
 					}
-					return entity.Book{
-						ID:        Id,
-						Name:      "Returned book",
-						AuthorIDs: []string{uuid.NewString()},
+
+					return &library.GetBookInfoResponse{
+						Book: &library.Book{
+							Id:       Id,
+							Name:     "Returned book",
+							AuthorId: []string{uuid.NewString()},
+						},
 					}, e
 				})
 			}

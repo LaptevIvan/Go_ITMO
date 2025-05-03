@@ -2,18 +2,27 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/project/library/config"
+	"github.com/project/library/internal/entity"
+	"github.com/project/library/internal/usecase/outbox"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/project/library/db"
 
-	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
-	"github.com/project/library/config"
+	"runtime"
+
+	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	generated "github.com/project/library/generated/api/library"
 	"github.com/project/library/internal/controller"
 	"github.com/project/library/internal/usecase/library"
@@ -24,7 +33,16 @@ import (
 	"google.golang.org/grpc/reflection"
 )
 
-const shutDownSeconds = 3
+const (
+	shutDownSeconds        = 3
+	dialerTimeoutSeconds   = 30
+	dialerKeepAliveSeconds = 180
+	transportMaxIdleConns  = 100
+	transportMaxConnsPerHost
+	transportIdleConnTimeoutSeconds       = 90
+	transportTLSHandshakeTimeoutSeconds   = 15
+	transportExpectContinueTimeoutSeconds = 2
+)
 
 func Run(logger *zap.Logger, cfg *config.Config) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -38,10 +56,39 @@ func Run(logger *zap.Logger, cfg *config.Config) {
 	defer dbPool.Close()
 	db.SetupPostgres(dbPool, logger)
 
-	repo := repository.New(logger, dbPool)
-	useCases := library.New(logger, repo, repo)
+	var logRepo *zap.Logger
+	if cfg.Log.LogDBRepo {
+		logRepo = logger
+	} else {
+		logRepo = nil
+	}
+	repo := repository.New(logRepo, dbPool)
+	outboxRepository := repository.NewOutbox(dbPool, cfg.Outbox.AttemptsRetry)
 
-	ctrl := controller.New(logger, useCases, useCases)
+	var logTransactor *zap.Logger
+	if cfg.Log.LogUseCase {
+		logTransactor = logger
+	} else {
+		logTransactor = nil
+	}
+	transactor := repository.NewTransactor(logTransactor, dbPool)
+	runOutbox(ctx, cfg, logger, outboxRepository, transactor)
+
+	var logUseCase *zap.Logger
+	if cfg.Log.LogUseCase {
+		logUseCase = logger
+	} else {
+		logUseCase = nil
+	}
+	useCases := library.New(logUseCase, repo, repo, outboxRepository, transactor)
+
+	var logController *zap.Logger
+	if cfg.Log.LogController {
+		logController = logger
+	} else {
+		logController = nil
+	}
+	ctrl := controller.New(logController, useCases, useCases)
 
 	go runRest(ctx, cfg, logger)
 	go runGrpc(cfg, logger, ctrl)
@@ -50,8 +97,124 @@ func Run(logger *zap.Logger, cfg *config.Config) {
 	time.Sleep(time.Second * shutDownSeconds)
 }
 
+func runOutbox(
+	ctx context.Context,
+	cfg *config.Config,
+	logger *zap.Logger,
+	outboxRepository library.OutboxRepository,
+	transactor repository.Transactor,
+) {
+	dialer := &net.Dialer{
+		Timeout:   dialerTimeoutSeconds * time.Second,
+		KeepAlive: dialerKeepAliveSeconds * time.Second,
+	}
+
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          transportMaxIdleConns,
+		MaxConnsPerHost:       transportMaxConnsPerHost,
+		IdleConnTimeout:       transportIdleConnTimeoutSeconds * time.Second,
+		TLSHandshakeTimeout:   transportTLSHandshakeTimeoutSeconds * time.Second,
+		ExpectContinueTimeout: transportExpectContinueTimeoutSeconds * time.Second,
+		MaxIdleConnsPerHost:   runtime.GOMAXPROCS(0) + 1,
+	}
+
+	client := new(http.Client)
+	client.Transport = transport
+
+	globalHandler := globalOutboxHandler(client, cfg.Outbox.AuthorSendURL, cfg.Outbox.BookSendURL)
+
+	var logOutbox *zap.Logger
+	if cfg.Log.LogOutboxWorker {
+		logOutbox = logger
+	} else {
+		logOutbox = nil
+	}
+	outboxService := outbox.New(logOutbox, outboxRepository, globalHandler, cfg, transactor)
+
+	outboxService.Start(
+		ctx,
+		cfg.Outbox.Workers,
+		cfg.Outbox.BatchSize,
+		cfg.Outbox.WaitTimeMS,
+		cfg.Outbox.InProgressTTLMS,
+	)
+}
+
+func globalOutboxHandler(
+	client *http.Client,
+	authorURL,
+	bookURL string,
+) outbox.GlobalHandler {
+	return func(kind repository.OutboxKind) (outbox.KindHandler, error) {
+		switch kind {
+		case repository.OutboxKindAuthor:
+			return authorOutboxHandler(client, authorURL), nil
+		case repository.OutboxKindBook:
+			return bookOutboxHandler(client, bookURL), nil
+		default:
+			return nil, fmt.Errorf("unsupported outbox kind: %d", kind)
+		}
+	}
+}
+
+const contentType = "application/json"
+
+var errFailRequest = errors.New("Not 2xx response")
+
+const statusOk = 2
+
+func authorOutboxHandler(client *http.Client, url string) outbox.KindHandler {
+	return func(_ context.Context, data []byte) error {
+		author := entity.Author{}
+		err := json.Unmarshal(data, &author)
+
+		if err != nil {
+			return fmt.Errorf("can not deserialize data in book outbox handler: %w", err)
+		}
+
+		response, err := client.Post(url, contentType, strings.NewReader(author.ID))
+		if err != nil {
+			return fmt.Errorf("can not make post request to given url: %w", err)
+		}
+
+		defer response.Body.Close()
+
+		if response.StatusCode/100 != statusOk {
+			return errFailRequest
+		}
+
+		return nil
+	}
+}
+
+func bookOutboxHandler(client *http.Client, url string) outbox.KindHandler {
+	return func(_ context.Context, data []byte) error {
+		book := entity.Book{}
+		err := json.Unmarshal(data, &book)
+
+		if err != nil {
+			return fmt.Errorf("can not deserialize data in book outbox handler: %w", err)
+		}
+
+		response, err := client.Post(url, contentType, strings.NewReader(book.ID))
+		if err != nil {
+			return fmt.Errorf("can not make post request to given url: %w", err)
+		}
+
+		defer response.Body.Close()
+
+		if response.StatusCode/100 != statusOk {
+			return errFailRequest
+		}
+
+		return nil
+	}
+}
+
 func runRest(ctx context.Context, cfg *config.Config, logger *zap.Logger) {
-	mux := runtime.NewServeMux()
+	mux := gateway.NewServeMux()
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 
 	address := "localhost:" + cfg.GRPC.Port

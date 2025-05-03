@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 
+	"github.com/project/library/pkg/logger"
+
 	"go.uber.org/zap"
 
 	"github.com/project/library/generated/api/library"
@@ -11,10 +13,7 @@ import (
 )
 
 func (i *implementation) GetAuthorInfo(ctx context.Context, req *library.GetAuthorInfoRequest) (*library.GetAuthorInfoResponse, error) {
-	if err := req.ValidateAll(); err != nil {
-		if log {
-			i.logger.Error("Got invalid request", zap.Any("request", req), zap.Error(err))
-		}
+	if err := req.ValidateAll(); logger.CheckError(err, i.logger, "Got invalid request", zap.Any("request", req), zap.Error(err)) {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
@@ -24,8 +23,5 @@ func (i *implementation) GetAuthorInfo(ctx context.Context, req *library.GetAuth
 		return nil, i.convertErr(err)
 	}
 
-	return &library.GetAuthorInfoResponse{
-		Id:   author.ID,
-		Name: author.Name,
-	}, nil
+	return author, nil
 }

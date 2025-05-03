@@ -3,7 +3,7 @@ package controller
 import (
 	"context"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"github.com/project/library/pkg/logger"
 
 	"go.uber.org/zap"
 
@@ -13,10 +13,7 @@ import (
 )
 
 func (i *implementation) AddBook(ctx context.Context, req *library.AddBookRequest) (*library.AddBookResponse, error) {
-	if err := req.ValidateAll(); err != nil {
-		if log {
-			i.logger.Error("Got invalid request", zap.Any("request", req), zap.Error(err))
-		}
+	if err := req.ValidateAll(); logger.CheckError(err, i.logger, "Got invalid request", zap.Any("request", req), zap.Error(err)) {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
@@ -26,13 +23,5 @@ func (i *implementation) AddBook(ctx context.Context, req *library.AddBookReques
 		return nil, i.convertErr(err)
 	}
 
-	return &library.AddBookResponse{
-		Book: &library.Book{
-			Id:        book.ID,
-			Name:      book.Name,
-			AuthorId:  book.AuthorIDs,
-			CreatedAt: timestamppb.New(book.CreatedAt),
-			UpdatedAt: timestamppb.New(book.UpdatedAt),
-		},
-	}, nil
+	return book, nil
 }

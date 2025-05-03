@@ -1,4 +1,4 @@
-# Database
+# HW 1 (database)
 
 ## NOTE: Инструкция к запуску сервиса находится в docs/README.md
 
@@ -255,6 +255,77 @@ message Book {
 }
 ```
 
+# HW 2 (outbox)
+## Часть 6
+С этой части начинается ДЗ `outbox`. Ветка с решением должна иметь название `outbox`. Важно, чтобы в PR не было diff'a старого ДЗ.
+Вы можете добиться этого, сделав rebase на `main` после проверки предыдущего ДЗ
+
+Реализуйте паттерн `outbox`, который обсуждался на лекции
+
+Создайте таблицу `outbox`
+```sql
+CREATE TYPE outbox_status as ENUM ('CREATED', 'IN_PROGRESS', 'SUCCESS');
+
+CREATE TABLE outbox
+(
+    idempotency_key TEXT PRIMARY KEY,
+    data            JSONB                   NOT NULL,
+    status          outbox_status           NOT NULL,
+    kind            INT                     NOT NULL,
+    created_at      TIMESTAMP DEFAULT now() NOT NULL,
+    updated_at      TIMESTAMP DEFAULT now() NOT NULL
+);
+```
+
+Поддержите транзакции на уровне доменной логики
+
+```go
+type Transactor interface {
+	WithTx(ctx context.Context, function func(ctx context.Context) error) error
+}
+
+func extractTx(ctx context.Context) (pgx.Tx, error) {}
+
+func injectTx(ctx context.Context, pool *pgxpool.Pool) (context.Context, error, pgx.Tx) {}
+```
+
+Например:
+```go
+func (l *libraryImpl) RegisterBook(ctx context.Context, name string, authorIDs []string) (*library.AddBookResponse, error) {
+    var book entity.Book
+	err := l.transactor.WithTx(ctx, func(ctx context.Context) error {
+		book, txErr = l.booksRepository.CreateBook(ctx, entity.Book{
+			Name:      name,
+			AuthorIDs: authorIDs,
+		})
+		
+		...
+		l.outboxRepository.SendMessage(ctx, idempotencyKey, repository.OutboxKindBook, serialized)
+	})
+	
+	...
+}
+```
+
+
+Поддержите конфиг для Outbox
+
+```go
+type Outbox struct {
+    Enabled         bool          `env:"OUTBOX_ENABLED"`
+    Workers         int           `env:"OUTBOX_WORKERS"`
+    BatchSize       int           `env:"OUTBOX_BATCH_SIZE"`
+    WaitTimeMS      time.Duration `env:"OUTBOX_WAIT_TIME_MS"`
+    InProgressTTLMS time.Duration `env:"OUTBOX_IN_PROGRESS_TTL_MS"`
+    AuthorSendURL   string        `env:"OUTBOX_AUTHOR_SEND_URL"`
+    BookSendURL     string        `env:"OUTBOX_BOOK_SEND_URL"`
+}
+```
+
+При создании книги или автора вам необходимо асинхронно отправить `POST` запрос c `AuthorID` или `BookID` на `OUTBOX_AUTHOR_SEND_URL`
+или `OUTBOX_BOOK_SEND_URL`, соответственно.
+
+
 ## Унификация технологий
 
 Для удобства выполнения и проверки дз вводится ряд правил, унифицирующих используемые технологии
@@ -309,7 +380,7 @@ message Book {
 
 ## Сдача
 
-* Открыть pull request из ветки `hw` в ветку `main` **вашего репозитория**.
+* Открыть pull request из ветки задания в ветку `main` **вашего репозитория**.
 
 * В описании PR заполнить количество часов, которые вы потратили на это задание.
 

@@ -3,7 +3,10 @@ EASYP_BIN := $(LOCAL_BIN)/easyp
 GOIMPORTS_BIN := $(LOCAL_BIN)/goimports
 GOLANGCI_BIN := $(LOCAL_BIN)/golangci-lint
 GO_TEST=$(LOCAL_BIN)/gotest
-GO_TEST_ARGS=-race -v -tags=integration_test ./...
+GO_TEST_ARGS_BASE=-race -v
+GO_TEST_ARGS_UNIT=${GO_TEST_ARGS_BASE} ./...
+GO_TEST_ARGS_DATABASE=${GO_TEST_ARGS_BASE} -tags=database_hw ./...
+GO_TEST_ARGS_OUTBOX=${GO_TEST_ARGS_BASE} -tags=outbox_hw ./...
 PROTOC_DOWNLOAD_LINK="https://github.com/protocolbuffers/protobuf/releases"
 PROTOC_VERSION=29.2
 UNAME_S := $(shell uname -s)
@@ -40,7 +43,17 @@ lint:
 .PHONY: test
 test:
 	echo 'Running tests...'
-	${GO_TEST} ${GO_TEST_ARGS}
+	${GO_TEST} ${GO_TEST_ARGS_UNIT}
+
+.PHONY: testDB
+testDB:
+	echo 'Running database tests...'
+	${GO_TEST} ${GO_TEST_ARGS_DATABASE}
+
+.PHONY: testOutbox
+testOutbox:
+	echo 'Running outbox tests...'
+	${GO_TEST} ${GO_TEST_ARGS_OUTBOX}
 
 .PHONY: update
 update:
@@ -82,7 +95,7 @@ bin-deps: .bin-deps
 .bin-deps: .create-bin .install-protoc
 	GOBIN=$(LOCAL_BIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5 && \
 	GOBIN=$(LOCAL_BIN) go install github.com/rakyll/gotest@v0.0.6 && \
-	go install github.com/easyp-tech/easyp/cmd/easyp@latest && \
+	go install github.com/easyp-tech/easyp/cmd/easyp@v0.7.11 && \
 	go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@v2.18.1 && \
 	go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.18.1 && \
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28.1 && \
@@ -114,6 +127,8 @@ fast-generate: .generate
 
 	GOBIN=$(LOCAL_BIN) go install go.uber.org/mock/mockgen@latest && \
 	$(LOCAL_BIN)/mockgen -source=./internal/usecase/library/usecases.go -destination=./internal/usecase/library/mocks/repository_mock.go -package=mocks &&   \
+	$(LOCAL_BIN)/mockgen -source=./internal/usecase/outbox/outbox.go -destination=./internal/usecase/outbox/mocks/outbox_repo_mock.go -package=mocks &&   \
+	$(LOCAL_BIN)/mockgen -destination=./internal/usecase/outbox/mocks/context_mock.go -package=mocks context Context &&   \
 	$(LOCAL_BIN)/mockgen -source=./internal/controller/service.go -destination=./internal/controller/mocks/usecase_mock.go -package=mocks && \
     $(LOCAL_BIN)/mockgen -source=./generated/api/library/library_grpc.pb.go -destination=./internal/controller/mocks/get_author_books_server_mock.go -package=mocks -exclude_interfaces=LibraryClient,libraryClient,Library_GetAuthorBooksClient,LibraryServer,UnsafeLibraryServer && \
     go mod tidy

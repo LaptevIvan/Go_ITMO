@@ -16,7 +16,6 @@ import (
 )
 
 const ErrForeignKeyViolation = "23503"
-const log = true
 
 var _ AuthorRepository = (*postgresRepository)(nil)
 var _ BooksRepository = (*postgresRepository)(nil)
@@ -33,14 +32,23 @@ func New(logger *zap.Logger, db *pgxpool.Pool) *postgresRepository {
 	}
 }
 
-func (p *postgresRepository) makeRollBack(ctx context.Context, tx pgx.Tx) {
-	err := tx.Rollback(ctx)
-	if err != nil && log {
-		p.logger.Error("Error during rollback", zap.Error(err))
+func (p *postgresRepository) makeCommit(ctx context.Context, tx pgx.Tx, txErr error) {
+	if txErr != nil {
+		p.makeRollBack(ctx, tx)
+		return
+	}
+	if txErr = tx.Commit(ctx); txErr != nil && p.logger != nil {
+		p.logger.Error("Error during commit", zap.Error(txErr))
 	}
 }
 
-func errConvert(err error) error {
+func (p *postgresRepository) makeRollBack(ctx context.Context, tx pgx.Tx) {
+	err := tx.Rollback(ctx)
+	if err != nil && !errors.Is(err, pgx.ErrTxClosed) && p.logger != nil {
+		p.logger.Error("Error during rollback", zap.Error(err))
+	}
+}
+func errAuthorConvert(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == ErrForeignKeyViolation {
 		return fmt.Errorf("Unknown author was: %w", entity.ErrAuthorNotFound)
@@ -54,9 +62,9 @@ func errConvert(err error) error {
 }
 
 func (p *postgresRepository) addBookAuthors(ctx context.Context, tx pgx.Tx, bookID string, authors []string) error {
-	newAuthorRows := make([][]interface{}, len(authors))
+	newAuthorRows := make([][]any, len(authors))
 	for i := 0; i < len(newAuthorRows); i++ {
-		newAuthorRows[i] = []interface{}{authors[i], bookID}
+		newAuthorRows[i] = []any{authors[i], bookID}
 	}
 
 	_, err := tx.CopyFrom(
@@ -65,20 +73,24 @@ func (p *postgresRepository) addBookAuthors(ctx context.Context, tx pgx.Tx, book
 		[]string{"author_id", "book_id"},
 		pgx.CopyFromRows(newAuthorRows))
 
-	if err != nil {
-		return errConvert(err)
-	}
-
-	return nil
+	return errAuthorConvert(err)
 }
 
-func (p *postgresRepository) AddBook(ctx context.Context, book entity.Book) (entity.Book, error) {
-	tx, err := p.db.Begin(ctx)
+func (p *postgresRepository) AddBook(ctx context.Context, book entity.Book) (resBook entity.Book, txErr error) {
+	var (
+		tx  pgx.Tx
+		err error
+	)
 
-	if err != nil {
-		return entity.Book{}, err
+	if tx, err = extractTx(ctx); err != nil {
+		tx, err = p.db.Begin(ctx)
+
+		if err != nil {
+			return entity.Book{}, err
+		}
+
+		defer p.makeCommit(ctx, tx, txErr)
 	}
-	defer p.makeRollBack(ctx, tx)
 
 	const queryBook = `
 INSERT INTO book (name)
@@ -97,10 +109,6 @@ RETURNING id, created_at, updated_at
 
 	err = p.addBookAuthors(ctx, tx, result.ID, book.AuthorIDs)
 	if err != nil {
-		return entity.Book{}, err
-	}
-
-	if err = tx.Commit(ctx); err != nil {
 		return entity.Book{}, err
 	}
 
@@ -124,7 +132,7 @@ UPDATE book SET name=$1 where id=$2
 	}
 
 	const queryGetCurrentAuthor = `
-SELECT (author_id) FROM author_book WHERE book_id=$1 
+SELECT (author_id) FROM author_book WHERE book_id=$1
 `
 	rows, err := tx.Query(ctx, queryGetCurrentAuthor, updBook.ID)
 	if err != nil {
@@ -175,21 +183,17 @@ DELETE FROM author_book where author_id = ANY($1)
 }
 
 func (p *postgresRepository) GetBook(ctx context.Context, idBook string) (entity.Book, error) {
-	tx, err := p.db.Begin(ctx)
-
-	if err != nil {
-		return entity.Book{}, err
-	}
-	defer p.makeRollBack(ctx, tx)
-
 	const query = `
-SELECT id, name, created_at, updated_at
-FROM book
-WHERE id = $1 FOR UPDATE
+SELECT b.id, b.name, b.created_at, b.updated_at, NULLIF(array_agg(ab.author_id), '{NULL}') AS authors
+FROM book b
+         LEFT JOIN
+     author_book ab ON b.id = ab.book_id
+WHERE b.id = $1
+GROUP BY b.id
 `
 	var book entity.Book
-	err = tx.QueryRow(ctx, query, idBook).
-		Scan(&book.ID, &book.Name, &book.CreatedAt, &book.UpdatedAt)
+	err := p.db.QueryRow(ctx, query, idBook).
+		Scan(&book.ID, &book.Name, &book.CreatedAt, &book.UpdatedAt, &book.AuthorIDs)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return entity.Book{}, entity.ErrBookNotFound
@@ -199,33 +203,6 @@ WHERE id = $1 FOR UPDATE
 		return entity.Book{}, err
 	}
 
-	const queryAuthors = `
-SELECT author_id
-FROM author_book
-WHERE book_id = $1
-`
-
-	rows, err := tx.Query(ctx, queryAuthors, idBook)
-
-	if err != nil {
-		return entity.Book{}, err
-	}
-
-	defer rows.Close()
-
-	for rows.Next() {
-		var authorID string
-
-		if err = rows.Scan(&authorID); err != nil {
-			return entity.Book{}, err
-		}
-
-		book.AuthorIDs = append(book.AuthorIDs, authorID)
-	}
-
-	if err = tx.Commit(ctx); err != nil {
-		return entity.Book{}, err
-	}
 	return book, nil
 }
 
@@ -236,9 +213,16 @@ func (p *postgresRepository) GetAuthorBooks(ctx context.Context, idAuthor string
 		return nil, err
 	}
 
-	const queryBook = `DECLARE booksCursor CURSOR FOR 
-SELECT book_id FROM author_book
-WHERE author_id=$1
+	const queryBook = `
+DECLARE booksCursor CURSOR FOR
+    SELECT b.id, b.name, b.created_at, b.updated_at, array_agg(subquery.author_id) AS authors
+    FROM book b
+             INNER JOIN
+         (SELECT ab.book_id, ab.author_id
+          FROM author_book ab
+                   INNER JOIN (SELECT author_id, book_id FROM author_book WHERE author_id = $1) sub
+                              ON ab.book_id = sub.book_id) subquery ON b.id = subquery.book_id
+    GROUP BY b.id
 `
 	_, err = tx.Exec(ctx, queryBook, idAuthor)
 	if err != nil {
@@ -253,28 +237,31 @@ WHERE author_id=$1
 		defer close(ans)
 		for {
 			rows, err := tx.Query(ctx, queryGetBook)
-			if err != nil && log {
+			if err != nil && p.logger != nil {
 				p.logger.Error("error getting books by cursor", zap.Error(err))
 				return
 			}
 			var rowsRead int
 			for rows.Next() {
 				rowsRead++
-				var id string
-				if err = rows.Scan(&id); err != nil {
+				var book entity.Book
+				if err = rows.Scan(&book.ID, &book.Name, &book.CreatedAt, &book.UpdatedAt, &book.AuthorIDs); err != nil {
 					rows.Close()
-					if log {
+					if p.logger != nil {
 						p.logger.Error("error getting books by cursor", zap.Error(err))
 					}
 					return
 				}
-				book, _ := p.GetBook(ctx, id)
-				ans <- book
+				select {
+				case <-ctx.Done():
+					return
+				case ans <- book:
+				}
 			}
 			rows.Close()
 
 			if rowsRead == 0 {
-				if err = tx.Commit(ctx); err != nil && log {
+				if err = tx.Commit(ctx); err != nil && p.logger != nil {
 					p.logger.Error("error making commit", zap.Error(err))
 				}
 				return
@@ -286,13 +273,6 @@ WHERE author_id=$1
 }
 
 func (p *postgresRepository) RegisterAuthor(ctx context.Context, author entity.Author) (entity.Author, error) {
-	tx, err := p.db.Begin(ctx)
-
-	if err != nil {
-		return entity.Author{}, err
-	}
-	defer p.makeRollBack(ctx, tx)
-
 	const queryBook = `
 INSERT INTO author (name)
 VALUES ($1)
@@ -302,13 +282,9 @@ RETURNING id, created_at, updated_at
 		Name: author.Name,
 	}
 
-	err = tx.QueryRow(ctx, queryBook, author.Name).Scan(&result.ID, &result.CreatedAt, &result.UpdatedAt)
+	err := p.db.QueryRow(ctx, queryBook, author.Name).Scan(&result.ID, &result.CreatedAt, &result.UpdatedAt)
 
 	if err != nil {
-		return entity.Author{}, err
-	}
-
-	if err = tx.Commit(ctx); err != nil {
 		return entity.Author{}, err
 	}
 
@@ -316,37 +292,15 @@ RETURNING id, created_at, updated_at
 }
 
 func (p *postgresRepository) ChangeAuthorInfo(ctx context.Context, updAuthor entity.Author) error {
-	tx, err := p.db.Begin(ctx)
-
-	if err != nil {
-		return err
-	}
-	defer p.makeRollBack(ctx, tx)
-
 	const queryBook = `
 UPDATE author SET name=$1 WHERE id=$2
 `
-	_, err = tx.Exec(ctx, queryBook, updAuthor.Name, updAuthor.ID)
+	_, err := p.db.Exec(ctx, queryBook, updAuthor.Name, updAuthor.ID)
 
-	if err != nil {
-		return err
-	}
-
-	if err = tx.Commit(ctx); err != nil {
-		return err
-	}
-
-	return nil
+	return errAuthorConvert(err)
 }
 
 func (p *postgresRepository) GetAuthorInfo(ctx context.Context, idAuthor string) (entity.Author, error) {
-	tx, err := p.db.Begin(ctx)
-
-	if err != nil {
-		return entity.Author{}, err
-	}
-	defer p.makeRollBack(ctx, tx)
-
 	const query = `
 SELECT id, name, created_at, updated_at
 FROM author
@@ -354,15 +308,11 @@ WHERE id = $1
 `
 
 	var author entity.Author
-	err = tx.QueryRow(ctx, query, idAuthor).
+	err := p.db.QueryRow(ctx, query, idAuthor).
 		Scan(&author.ID, &author.Name, &author.CreatedAt, &author.UpdatedAt)
 
 	if err != nil {
-		return entity.Author{}, errConvert(err)
-	}
-
-	if err = tx.Commit(ctx); err != nil {
-		return entity.Author{}, err
+		return entity.Author{}, errAuthorConvert(err)
 	}
 
 	return author, nil

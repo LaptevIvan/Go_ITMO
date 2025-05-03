@@ -8,10 +8,13 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/project/library/internal/usecase/library/mocks"
-
 	validation "github.com/go-ozzo/ozzo-validation/v4"
 	"github.com/go-ozzo/ozzo-validation/v4/is"
+	"github.com/google/uuid"
+	"github.com/project/library/generated/api/library"
+
+	"github.com/project/library/internal/usecase/library/mocks"
+
 	"github.com/project/library/internal/entity"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -24,12 +27,26 @@ func initBookTest(t *testing.T) (context.Context, *mocks.MockBooksRepository, *l
 	ctrl := gomock.NewController(t)
 	mockBooksRepo := mocks.NewMockBooksRepository(ctrl)
 	ctx := context.Background()
-	logger, err := zap.NewProduction()
-	if err != nil {
-		t.Fatal("assertion error: " + err.Error())
-	}
-	auc := New(logger, nil, mockBooksRepo)
+	logger, e := zap.NewProduction()
+	require.NoError(t, e)
+
+	auc := New(logger, nil, mockBooksRepo, nil, nil)
 	return ctx, mockBooksRepo, auc
+}
+
+func initBookTransactorTest(t *testing.T) (context.Context, *mocks.MockBooksRepository, *mocks.MockOutboxRepository, *mocks.MockTransactor, *libraryImpl) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	mockBookRepo := mocks.NewMockBooksRepository(ctrl)
+	mockOutboxRepo := mocks.NewMockOutboxRepository(ctrl)
+	mockTransactor := mocks.NewMockTransactor(ctrl)
+
+	ctx := context.Background()
+	logger, e := zap.NewProduction()
+	require.NoError(t, e)
+
+	auc := New(logger, nil, mockBookRepo, mockOutboxRepo, mockTransactor)
+	return ctx, mockBookRepo, mockOutboxRepo, mockTransactor, auc
 }
 
 func TestAddBook(t *testing.T) {
@@ -39,43 +56,58 @@ func TestAddBook(t *testing.T) {
 	authors := []string{"1", "2", "3"}
 
 	tests := []struct {
-		name       string
-		requireErr error
+		name                 string
+		errDBRepoRequire     error
+		errOutboxRepoRequire error
 	}{
 		{name: "valid add book",
-			requireErr: nil},
+			errDBRepoRequire: nil},
 
-		{name: "add with internal error",
-			requireErr: errInternalBooks},
+		{name: "add with internal error in data base repo",
+			errDBRepoRequire: errInternalBooks},
+
+		{name: "add with internal error in outbox repo",
+			errOutboxRepoRequire: errInternalBooks},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			ctx, mockBookRepo, s := initBookTest(t)
-			mockBookRepo.EXPECT().AddBook(ctx, gomock.Any()).DoAndReturn(func(ctx context.Context, input entity.Book) (entity.Book, error) {
-				e := test.requireErr
-				if e != nil {
-					return entity.Book{}, e
-				}
-				return input, e
-			})
-			book, err := s.AddBook(ctx, name, authors)
-			require.Equal(t, err, test.requireErr)
-			if err != nil {
-				require.Empty(t, book)
-				return
-			}
+			ctx, mockBookRepo, mockOutboxRepo, mockTransactor, s := initBookTransactorTest(t)
+			tDBErr := test.errDBRepoRequire
+			tOutboxErr := test.errOutboxRepoRequire
 
-			err = validation.ValidateStructWithContext(
-				ctx,
-				&book,
-				validation.Field(&book.ID, is.UUID),
-			)
-			require.NoError(t, err)
-			require.Equal(t, name, book.Name)
-			require.Equal(t, authors, book.AuthorIDs)
+			mockTransactor.EXPECT().WithTx(ctx, gomock.Any()).DoAndReturn(func(ctx context.Context, f func(ctx context.Context) error) error {
+				return f(ctx)
+			})
+			mockBookRepo.EXPECT().AddBook(ctx, gomock.Any()).DoAndReturn(func(ctx context.Context, input entity.Book) (entity.Book, error) {
+				if tDBErr != nil {
+					return entity.Book{}, tDBErr
+				}
+				return input, tDBErr
+			})
+			mockOutboxRepo.EXPECT().SendMessage(ctx, gomock.Any(), gomock.Any(), gomock.Any()).Return(tOutboxErr).AnyTimes()
+			response, err := s.AddBook(ctx, name, authors)
+			switch {
+			case tDBErr != nil:
+				require.Equal(t, tDBErr, err)
+				require.Nil(t, response)
+			case tOutboxErr != nil:
+				require.Equal(t, tOutboxErr, err)
+				require.Nil(t, response)
+			default:
+				require.NoError(t, err)
+				rBook := response.GetBook()
+				err = validation.ValidateStructWithContext(
+					ctx,
+					rBook,
+					validation.Field(&rBook.Id, is.UUID),
+				)
+				require.NoError(t, err)
+				require.Equal(t, name, rBook.GetName())
+				require.Equal(t, authors, rBook.GetAuthorId())
+			}
 		})
 	}
 }
@@ -104,7 +136,12 @@ func TestUpdateBook(t *testing.T) {
 			t.Parallel()
 
 			ctx, mockBookRepo, s := initBookTest(t)
-			mockBookRepo.EXPECT().UpdateBook(ctx, gomock.Any()).Return(test.requireErr)
+			mockBookRepo.EXPECT().UpdateBook(ctx, entity.Book{
+				ID:        id,
+				Name:      name,
+				AuthorIDs: authors,
+			}).Return(test.requireErr)
+
 			err := s.UpdateBook(ctx, id, name, authors)
 			require.Equal(t, err, test.requireErr)
 		})
@@ -118,23 +155,27 @@ func TestGetBookInfo(t *testing.T) {
 		id   = "123"
 		name = "testName"
 	)
+	authorID := []string{uuid.NewString(), uuid.NewString()}
 
 	tests := []struct {
-		name        string
-		requireBook entity.Book
-		requireErr  error
+		name            string
+		requireResponse *library.GetBookInfoResponse
+		requireErr      error
 	}{
 		{name: "valid get book info",
-			requireBook: entity.Book{
-				ID:        id,
-				Name:      name,
-				AuthorIDs: []string{"1", "2", "3"},
+			requireResponse: &library.GetBookInfoResponse{
+				Book: &library.Book{
+					Id:       id,
+					Name:     name,
+					AuthorId: authorID,
+				},
 			},
 			requireErr: nil},
 
 		{name: "get book with internal error",
-			requireBook: entity.Book{},
-			requireErr:  errInternalBooks},
+			requireResponse: nil,
+			requireErr:      errInternalBooks,
+		},
 	}
 
 	for _, test := range tests {
@@ -142,13 +183,29 @@ func TestGetBookInfo(t *testing.T) {
 			t.Parallel()
 
 			ctx, mockBookRepo, s := initBookTest(t)
-			tBook := test.requireBook
+			tResp := test.requireResponse
 			tErr := test.requireErr
 
-			mockBookRepo.EXPECT().GetBook(ctx, gomock.Any()).Return(tBook, tErr)
-			book, err := s.GetBookInfo(ctx, id)
-			require.Equal(t, book, tBook)
-			require.Equal(t, err, tErr)
+			mockBookRepo.EXPECT().GetBook(ctx, id).DoAndReturn(func(ctx context.Context, id string) (entity.Book, error) {
+				if tErr != nil {
+					return entity.Book{}, tErr
+				}
+				return entity.Book{
+					ID:        id,
+					Name:      name,
+					AuthorIDs: authorID,
+				}, nil
+			})
+
+			response, err := s.GetBookInfo(ctx, id)
+			require.Equal(t, tErr, err)
+			if tErr != nil {
+				require.Nil(t, response)
+				return
+			}
+			require.Equal(t, tResp.GetBook().GetId(), response.GetBook().GetId())
+			require.Equal(t, tResp.GetBook().GetName(), response.GetBook().GetName())
+			require.Equal(t, tResp.GetBook().GetAuthorId(), response.GetBook().GetAuthorId())
 		})
 	}
 }
@@ -175,17 +232,19 @@ func makeFilledChan(books []entity.Book) <-chan entity.Book {
 	return ans
 }
 
-func readFilledChan(books <-chan entity.Book) []entity.Book {
-	if books == nil {
-		return nil
+func readFilledChan(t *testing.T, books []entity.Book, bChan <-chan *library.Book) {
+	t.Helper()
+	if bChan == nil {
+		return
 	}
-	ans := make([]entity.Book, len(books))
 	i := 0
-	for b := range books {
-		ans[i] = b
+	for b := range bChan {
+		bCheck := books[i]
+		require.Equal(t, bCheck.ID, b.GetId())
+		require.Equal(t, bCheck.Name, b.GetName())
+		require.Equal(t, bCheck.AuthorIDs, b.GetAuthorId())
 		i++
 	}
-	return ans
 }
 
 func TestGetAuthorBooks(t *testing.T) {
@@ -225,8 +284,8 @@ func TestGetAuthorBooks(t *testing.T) {
 
 			mockBookRepo.EXPECT().GetAuthorBooks(ctx, gomock.Any()).Return(returnChan, tErr)
 			bks, err := s.GetAuthorBooks(ctx, test.id)
-			require.Equal(t, tBooks, readFilledChan(bks))
 			require.Equal(t, tErr, err)
+			readFilledChan(t, tBooks, bks)
 		})
 	}
 }
