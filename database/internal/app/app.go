@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,6 +11,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/project/library/config"
 	"github.com/project/library/internal/entity"
@@ -25,8 +28,13 @@ import (
 	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	generated "github.com/project/library/generated/api/library"
 	"github.com/project/library/internal/controller"
+
 	"github.com/project/library/internal/usecase/library"
 	"github.com/project/library/internal/usecase/repository"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel/exporters/jaeger"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -47,6 +55,17 @@ const (
 func Run(logger *zap.Logger, cfg *config.Config) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	shutdown := initTracer(logger, cfg.Observability.JaegerURL)
+	defer func() {
+		err := shutdown(ctx)
+
+		if err != nil {
+			logger.Error("can not shutdown jaeger collector", zap.Error(err))
+		}
+	}()
+
+	go runMetricsServer(cfg.Observability.MetricsPort)
 
 	dbPool, err := pgxpool.New(ctx, cfg.PG.URL)
 	if err != nil {
@@ -95,6 +114,31 @@ func Run(logger *zap.Logger, cfg *config.Config) {
 
 	<-ctx.Done()
 	time.Sleep(time.Second * shutDownSeconds)
+}
+
+func runMetricsServer(port string) {
+	http.Handle("/metrics", promhttp.Handler())
+	http.ListenAndServe(":"+port, nil)
+}
+
+func initTracer(l *zap.Logger, url string) func(context.Context) error {
+	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(url)))
+
+	if err != nil {
+		l.Fatal("can not create jaeger collector", zap.Error(err))
+	}
+
+	tp := trace.NewTracerProvider(
+		trace.WithBatcher(exp),
+		trace.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName("library-service"),
+		)),
+	)
+
+	otel.SetTracerProvider(tp)
+
+	return tp.Shutdown
 }
 
 func runOutbox(
@@ -161,8 +205,6 @@ func globalOutboxHandler(
 
 const contentType = "application/json"
 
-var errFailRequest = errors.New("Not 2xx response")
-
 const statusOk = 2
 
 func authorOutboxHandler(client *http.Client, url string) outbox.KindHandler {
@@ -182,7 +224,7 @@ func authorOutboxHandler(client *http.Client, url string) outbox.KindHandler {
 		defer response.Body.Close()
 
 		if response.StatusCode/100 != statusOk {
-			return errFailRequest
+			return fmt.Errorf("error code %d during post request to given url: %w", response.StatusCode, err)
 		}
 
 		return nil
@@ -206,7 +248,7 @@ func bookOutboxHandler(client *http.Client, url string) outbox.KindHandler {
 		defer response.Body.Close()
 
 		if response.StatusCode/100 != statusOk {
-			return errFailRequest
+			return fmt.Errorf("error code %d during post request to given url: %w", response.StatusCode, err)
 		}
 
 		return nil
@@ -242,7 +284,19 @@ func runGrpc(cfg *config.Config, logger *zap.Logger, libraryService generated.Li
 		os.Exit(-1)
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.UnaryInterceptor(
+			otelgrpc.UnaryServerInterceptor(
+				otelgrpc.WithTracerProvider(otel.GetTracerProvider()),
+			),
+		),
+		grpc.StreamInterceptor(
+			otelgrpc.StreamServerInterceptor(
+				otelgrpc.WithTracerProvider(otel.GetTracerProvider()),
+			),
+		),
+	)
+
 	reflection.Register(s)
 
 	generated.RegisterLibraryServer(s, libraryService)

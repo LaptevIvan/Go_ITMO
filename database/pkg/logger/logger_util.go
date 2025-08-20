@@ -11,3 +11,9 @@ func CheckError(err error, logger *zap.Logger, msg string, fields ...zap.Field) 
 	}
 	return false
 }
+
+func MakeInfo(logger *zap.Logger, msg string, fields ...zap.Field) {
+	if logger != nil {
+		logger.Info(msg, fields...)
+	}
+}

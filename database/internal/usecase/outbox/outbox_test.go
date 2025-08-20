@@ -3,7 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
-	"sync"
+	"fmt"
 	"testing"
 	"time"
 
@@ -29,11 +29,12 @@ const (
 )
 
 var errInternal = errors.New("Internal")
+var undefinedGlobalHandler = fmt.Errorf("Undefined kind for global handler")
 
 var testGlobalHandler = func(kind repository.OutboxKind) (KindHandler, error) {
 	switch kind {
 	case repository.OutboxKindUndefined:
-		return nil, errInternal
+		return nil, undefinedGlobalHandler
 	case repository.OutboxKindAuthor:
 		return testAuthorHandler, nil
 	case repository.OutboxKindBook:
@@ -55,13 +56,11 @@ func Test_outboxImpl_worker(t *testing.T) {
 	t.Parallel()
 
 	type args struct {
-		wg            *sync.WaitGroup
 		batchSize     int
 		waitTime      time.Duration
 		inProgressTTL time.Duration
 	}
 	standartArgs := args{
-		wg:            new(sync.WaitGroup),
 		batchSize:     1,
 		waitTime:      time.Nanosecond,
 		inProgressTTL: time.Second,
@@ -209,7 +208,6 @@ func Test_outboxImpl_worker(t *testing.T) {
 
 			outboxRepo := mocks.NewMockOutboxRepository(ctrl)
 			ctx := mocks2.NewMockContext(ctrl)
-			tt.args.wg.Add(1)
 
 			inc := 0
 			done := make(chan struct{})
@@ -283,7 +281,7 @@ func Test_outboxImpl_worker(t *testing.T) {
 				cfg:              cfg,
 				transactor:       tr,
 			}
-			o.worker(ctx, tt.args.wg, tt.args.batchSize, tt.args.waitTime, tt.args.inProgressTTL)
+			o.worker(ctx, tt.args.batchSize, tt.args.waitTime, tt.args.inProgressTTL)
 		})
 	}
 }

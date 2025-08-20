@@ -3,10 +3,7 @@ EASYP_BIN := $(LOCAL_BIN)/easyp
 GOIMPORTS_BIN := $(LOCAL_BIN)/goimports
 GOLANGCI_BIN := $(LOCAL_BIN)/golangci-lint
 GO_TEST=$(LOCAL_BIN)/gotest
-GO_TEST_ARGS_BASE=-race -v
-GO_TEST_ARGS_UNIT=${GO_TEST_ARGS_BASE} ./...
-GO_TEST_ARGS_DATABASE=${GO_TEST_ARGS_BASE} -tags=database_hw ./...
-GO_TEST_ARGS_OUTBOX=${GO_TEST_ARGS_BASE} -tags=outbox_hw ./...
+GO_TEST_ARGS=-race -v -tags=integration_test ./...
 PROTOC_DOWNLOAD_LINK="https://github.com/protocolbuffers/protobuf/releases"
 PROTOC_VERSION=29.2
 UNAME_S := $(shell uname -s)
@@ -43,17 +40,7 @@ lint:
 .PHONY: test
 test:
 	echo 'Running tests...'
-	${GO_TEST} ${GO_TEST_ARGS_UNIT}
-
-.PHONY: testDB
-testDB:
-	echo 'Running database tests...'
-	${GO_TEST} ${GO_TEST_ARGS_DATABASE}
-
-.PHONY: testOutbox
-testOutbox:
-	echo 'Running outbox tests...'
-	${GO_TEST} ${GO_TEST_ARGS_OUTBOX}
+	${GO_TEST} ${GO_TEST_ARGS}
 
 .PHONY: update
 update:

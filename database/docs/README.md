@@ -85,7 +85,7 @@ and service will edit book, if he exists, else return code status 'not found'.
 
 ## The "Outbox" pattern
 
-The service implements the "Outbox" pattern, which allows you to send messages 
+The service implements the "Outbox" pattern, which allows you to send messages
 asynchronously to other services. There are currently only 2 kind handlers for outbox: authorOutboxHandler
 and bookOutboxHandler which just asynchronously send a POST request with the AuthorID or BookID to
 OUTBOX_AUTHOR_SEND_URL or OUTBOX_BOOK_SEND_URL, respectively. But it's easy to add new kind handlers that will
@@ -95,10 +95,10 @@ perform more complex logic.
 ## How to run service
 
 ### 1) Run branch generate in MakeFile
-### 2) Set environment variables 
+### 2) Set environment variables
 
 #### For gRPC:
-1) GRPC_PORT 
+1) GRPC_PORT
 2) GRPC_GATEWAY_PORT
 
 #### For database
@@ -107,7 +107,7 @@ perform more complex logic.
 3) POSTGRES_DB
 4) POSTGRES_USER
 5) POSTGRES_PASSWORD
-6) POSTGRES_MAX_CONN 
+6) POSTGRES_MAX_CONN
 
 #### For Outbox (if you want to it work)
 1) OUTBOX_ENABLED = true

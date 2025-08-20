@@ -2,7 +2,6 @@ package outbox
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/project/library/pkg/logger"
@@ -60,22 +59,17 @@ func (o *outboxImpl) Start(
 	waitTime time.Duration,
 	inProgressTTL time.Duration,
 ) {
-	wg := new(sync.WaitGroup)
-
 	for workerID := 1; workerID <= workers; workerID++ {
-		wg.Add(1)
-		go o.worker(ctx, wg, batchSize, waitTime, inProgressTTL)
+		go o.worker(ctx, batchSize, waitTime, inProgressTTL)
 	}
 }
 
 func (o *outboxImpl) worker(
 	ctx context.Context,
-	wg *sync.WaitGroup,
 	batchSize int,
 	waitTime time.Duration,
 	inProgressTTL time.Duration,
 ) {
-	defer wg.Done()
 
 	for {
 		select {
@@ -93,13 +87,10 @@ func (o *outboxImpl) worker(
 
 				err := o.transactor.WithTx(ctx, func(ctx context.Context) error {
 					messages, err := o.outboxRepository.GetMessages(ctx, batchSize, inProgressTTL)
-
 					if logger.CheckError(err, o.logger, "can not fetch messages from outbox", zap.Error(err)) {
 						return err
 					}
-					if o.logger != nil {
-						o.logger.Info("messages fetched", zap.Int("size", len(messages)))
-					}
+					logger.MakeInfo(o.logger, "messages fetched", zap.Int("size", len(messages)))
 
 					successKeys := make([]string, 0, len(messages))
 					failKeys := make([]string, 0, len(messages))

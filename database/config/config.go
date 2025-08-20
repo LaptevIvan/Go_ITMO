@@ -13,6 +13,7 @@ import (
 const (
 	defaultAttemptsRetry = 2000
 	defaultLogValue      = true
+	defaultMaxConn       = "10"
 )
 
 type (
@@ -50,6 +51,11 @@ type (
 			LogDBRepo       bool `env:"LOG_DB_REPO_ENABLED"`
 			LogOutboxWorker bool `env:"LOG_OUTBOX_WORKER_ENABLED"`
 		}
+
+		Observability struct {
+			MetricsPort string `env:"METRICS_PORT"`
+			JaegerURL   string `env:"JAEGER_URL"`
+		}
 	}
 )
 
@@ -64,13 +70,15 @@ func NewConfig() (*Config, error) {
 	cfg.PG.DB = os.Getenv("POSTGRES_DB")
 	cfg.PG.User = os.Getenv("POSTGRES_USER")
 	cfg.PG.Password = os.Getenv("POSTGRES_PASSWORD")
-	cfg.PG.MaxConn = os.Getenv("POSTGRES_MAX_CONN")
-
-	cfg.PG.URL = fmt.Sprintf("postgres://%s:%s@", cfg.PG.User, cfg.PG.Password) +
-		net.JoinHostPort(cfg.PG.Host, cfg.PG.Port) + fmt.Sprintf("/%s?sslmode=disable", cfg.PG.DB)
 
 	var err error
 	v := viper.New()
+	if cfg.PG.MaxConn, err = parseEnvString(v, "db_MaxCon", "POSTGRES_MAX_CONN", defaultMaxConn); err != nil {
+		return nil, err
+	}
+
+	cfg.PG.URL = fmt.Sprintf("postgres://%s:%s@", cfg.PG.User, cfg.PG.Password) +
+		net.JoinHostPort(cfg.PG.Host, cfg.PG.Port) + fmt.Sprintf("/%s?sslmode=disable", cfg.PG.DB) + fmt.Sprintf("&pool_max_conns=%s", cfg.PG.MaxConn)
 
 	if cfg.Outbox.Enabled, err = parseEnvBool(v, "outbox", "OUTBOX_ENABLED"); err != nil {
 		return nil, err
@@ -121,6 +129,9 @@ func NewConfig() (*Config, error) {
 		return nil, err
 	}
 
+	cfg.Observability.MetricsPort = os.Getenv("METRICS_PORT")
+	cfg.Observability.JaegerURL = os.Getenv("JAEGER_URL")
+
 	return cfg, nil
 }
 
@@ -170,4 +181,18 @@ func parseEnvInt(v *viper.Viper, key, envVar string, defaultValue ...int) (int, 
 		v.SetDefault(key, defaultValue[0])
 	}
 	return v.GetInt(key), nil
+}
+
+func parseEnvString(v *viper.Viper, key, envVar string, defaultValue ...string) (string, error) {
+	err := v.BindEnv(key, envVar)
+	if err != nil {
+		if len(defaultValue) > 0 {
+			return defaultValue[0], err
+		}
+		return "", err
+	}
+	if len(defaultValue) > 0 {
+		v.SetDefault(key, defaultValue[0])
+	}
+	return v.GetString(key), nil
 }

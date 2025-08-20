@@ -1,6 +1,38 @@
 version: "3.9"
 
 services:
+  library:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GRPC_PORT: "${GRPC_PORT}"
+      GRPC_GATEWAY_PORT: "${GRPC_GATEWAY_PORT}"
+      POSTGRES_DB: "${POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_PORT: "${POSTGRES_PORT}"
+      POSTGRES_HOST: "${POSTGRES_HOST}"
+      METRICS_PORT: "${METRICS_PORT}"
+      JAEGER_URL: "${JAEGER_URL}"
+      OUTBOX_ENABLED: "${OUTBOX_ENABLED}"
+      OUTBOX_WORKERS: "${OUTBOX_WORKERS}"
+      OUTBOX_BATCH_SIZE: "${OUTBOX_BATCH_SIZE}"
+      OUTBOX_WAIT_TIME_MS: "${OUTBOX_WAIT_TIME_MS}"
+      OUTBOX_IN_PROGRESS_TTL_MS: "${OUTBOX_IN_PROGRESS_TTL_MS}"
+      OUTBOX_BOOK_SEND_URL: "${OUTBOX_BOOK_SEND_URL}"
+    volumes:
+      - library-logs:/app/logs
+    ports:
+      - "${GRPC_GATEWAY_PORT}:${GRPC_GATEWAY_PORT}"
+      - "${GRPC_PORT}:${GRPC_PORT}"
+      - "${METRICS_PORT}:${METRICS_PORT}"
+    networks:
+      - internal
+
   postgres:
     container_name: 'postgres'
     image: postgres:17
@@ -18,11 +50,62 @@ services:
       - "postgres"
       - "-c"
       - "port=${POSTGRES_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.53
+    ports:
+      - "${JAEGER_WEB_PORT}:${JAEGER_WEB_PORT}"
+      - "${JAEGER_TRACE_PORT}:${JAEGER_TRACE_PORT}"
+    networks:
+      - internal
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9099:9090"
+    networks:
+      - internal
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./infra/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+    networks:
+      - internal
+
+  loki:
+    image: grafana/loki:2.9.2
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - internal
+
+  promtail:
+    image: grafana/promtail:2.9.2
+    volumes:
+      - library-logs:/var/log
+      - ./infra/promtail-config.yaml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
     networks:
       - internal
 
 volumes:
   postgres-data:
+  grafana-storage:
+  library-logs:
 
 networks:
   internal:

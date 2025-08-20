@@ -3,19 +3,22 @@ package library
 import (
 	"context"
 	"encoding/json"
-
-	"github.com/project/library/pkg/logger"
+	"github.com/project/library/internal/log"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/project/library/generated/api/library"
 	"github.com/project/library/internal/usecase/repository"
 
 	"github.com/project/library/internal/entity"
-	"go.uber.org/zap"
 )
 
 func (l *libraryImpl) RegisterAuthor(ctx context.Context, authorName string) (*library.RegisterAuthorResponse, error) {
-	var author entity.Author
+	span := trace.SpanFromContext(ctx)
+	traceID := span.SpanContext().TraceID().String()
+	log.InfoRegisterAuthor(l.logger, "Start of register author", traceID, authorName)
 
+	var author entity.Author
 	err := l.transactor.WithTx(ctx, func(ctx context.Context) error {
 		var txErr error
 		author, txErr = l.authorRepository.RegisterAuthor(ctx, entity.Author{
@@ -42,40 +45,52 @@ func (l *libraryImpl) RegisterAuthor(ctx context.Context, authorName string) (*l
 		return nil
 	})
 
-	if logger.CheckError(err, l.logger, "Failed register author", zap.Error(err)) {
+	if log.ErrorRegisterAuthor(l.logger, err, "Failed register author", traceID, authorName) {
+		span.SetAttributes(attribute.String("author_name", authorName))
+		span.RecordError(err)
 		return nil, err
 	}
-	if l.logger != nil {
-		l.logger.Info("Registered the author", zap.String("author's id", author.ID))
-	}
 
+	span.SetAttributes(attribute.String("author_id", author.ID))
+	log.InfoRegisterAuthor(l.logger, "Registered the author", traceID, authorName, author.ID)
 	return &library.RegisterAuthorResponse{
 		Id: author.ID,
 	}, nil
 }
 
 func (l *libraryImpl) ChangeAuthorInfo(ctx context.Context, idAuthor, newName string) error {
+	span := trace.SpanFromContext(ctx)
+	traceID := span.SpanContext().TraceID().String()
+	span.SetAttributes(attribute.String("author_id", idAuthor))
+	log.InfoChangeAuthorInfo(l.logger, "Start of change author info", traceID, idAuthor, newName)
+
 	err := l.authorRepository.ChangeAuthorInfo(ctx, entity.Author{
 		ID:   idAuthor,
 		Name: newName,
 	})
 
-	if !logger.CheckError(err, l.logger, "Failed changing author", zap.Error(err)) {
-		if l.logger != nil {
-			l.logger.Info("Changed the author with id", zap.String("id of author", idAuthor))
-		}
+	if log.ErrorChangeAuthorInfo(l.logger, err, "Failed changing author", traceID, idAuthor, newName) {
+		span.RecordError(err)
+	} else {
+		log.InfoChangeAuthorInfo(l.logger, "Changed the author with id", traceID, idAuthor, newName)
 	}
+
 	return err
 }
 
 func (l *libraryImpl) GetAuthorInfo(ctx context.Context, idAuthor string) (*library.GetAuthorInfoResponse, error) {
+	span := trace.SpanFromContext(ctx)
+	traceID := span.SpanContext().TraceID().String()
+	span.SetAttributes(attribute.String("author_id", idAuthor))
+	log.InfoGetAuthorInfo(l.logger, "start of getting author info", traceID, idAuthor)
+
 	author, err := l.authorRepository.GetAuthorInfo(ctx, idAuthor)
 
-	if logger.CheckError(err, l.logger, "Failed get author info", zap.String("author id", idAuthor), zap.Error(err)) {
+	if log.ErrorGetAuthorInfo(l.logger, err, "Failed get author info", traceID, idAuthor) {
+		span.RecordError(err)
 		return nil, err
-	}
-	if l.logger != nil {
-		l.logger.Info("Get the author info", zap.String("author id", idAuthor))
+	} else {
+		log.InfoGetAuthorInfo(l.logger, "Got the author info", traceID, idAuthor)
 	}
 
 	return &library.GetAuthorInfoResponse{
